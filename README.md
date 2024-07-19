@@ -6,3 +6,5 @@
  [Telegram](https://t.me/EasyScript) / [Telegram chat](https://t.me/EasyScriptChat) / [Telegram chat (Ukrainian)](https://t.me/EasyScriptChatUa)
  
  [Discord](https://discord.gg/rgRFKhkhrK)
+
+ Made with ❤️ by ThatsRaid & Bytes Union Community
