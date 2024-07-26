@@ -55,6 +55,8 @@
         return FindIndex(key) != -1;
     }
 
+
+
     public string GetKeyAt(int index)
     {
         if (index < 0 || index >= count)
@@ -155,11 +157,17 @@ public class EasyScriptObject
 
     internal object CallMethod(string methodName, List<Expression> arguments, Dictionary<string, object> variables, Dictionary<string, FunctionStatement> functions)
     {
+        ESConvert converter = new ESConvert();
         if (this.ContainsKey("__class__"))
         {
             var classObj = (EasyScriptClass)this["__class__"];
             while (classObj != null)
             {
+                if (classObj.Classes.TryGetValue(methodName, out var nestedClass))
+                {
+                    return nestedClass.Instantiate(arguments, variables, functions);
+                }
+
                 if (classObj.Methods.TryGetValue(methodName, out var method))
                 {
                     var localVars = new Dictionary<string, object>(variables);
@@ -186,7 +194,7 @@ public class EasyScriptObject
                 classObj = classObj.ParentClass;
             }
         }
-        throw new Exception($"Method '{methodName}' is not supported on object of type '{this.GetType().Name}'.");
+        throw new Exception($"Method '{methodName}' is not supported on object of type '{converter.Convert(this.GetType())}'.");
     }
 
 }

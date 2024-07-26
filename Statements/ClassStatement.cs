@@ -1,14 +1,13 @@
 class ClassStatement : Statement
 {
     public string ClassName { get; }
-    public string BaseClassName { get; }
-
+    public Expression BaseClassExpression { get; }
     public List<Statement> Body { get; }
 
-    public ClassStatement(string className, string baseClassName, List<Statement> body)
+    public ClassStatement(string className, Expression baseClassExpression, List<Statement> body)
     {
         ClassName = className;
-        BaseClassName = baseClassName;
+        BaseClassExpression = baseClassExpression;
         Body = body;
     }
 
@@ -16,13 +15,14 @@ class ClassStatement : Statement
     {
         EasyScriptClass baseClass = null;
 
-        if (BaseClassName != null)
+        if (BaseClassExpression != null)
         {
-            if (!variables.TryGetValue(BaseClassName, out var classObj) || !(classObj is EasyScriptClass))
+            var baseClassObject = BaseClassExpression.Evaluate(variables, functions);
+            if (!(baseClassObject is EasyScriptClass))
             {
-                throw new Exception($"Class '{BaseClassName}' not found");
+                throw new Exception($"Base class must be an EasyScriptClass, got {baseClassObject.GetType()}");
             }
-            baseClass = (EasyScriptClass)classObj;
+            baseClass = (EasyScriptClass)baseClassObject;
         }
 
         variables[ClassName] = new EasyScriptClass(ClassName, baseClass, Body);

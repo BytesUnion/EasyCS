@@ -17,7 +17,7 @@ class FunctionCallStatement : Statement
         }
 
         FunctionStatement function = functions[functionName];
-        Dictionary<string, object> localVariables = new Dictionary<string, object>();
+        Dictionary<string, object> localVariables = new Dictionary<string, object>(function.OriginalContext);
 
         for (int i = 0; i < function.Parameters.Count; i++)
         {
@@ -29,17 +29,11 @@ class FunctionCallStatement : Statement
             statement.Execute(localVariables, functions);
             if (localVariables.ContainsKey("return"))
             {
-                if (functionName == variables.GetValueOrDefault("current_function", ""))
-                {
-                    variables["return"] = localVariables["return"];
-                }
+                variables["return"] = localVariables["return"];
                 return;
             }
         }
 
-        if (functionName == variables.GetValueOrDefault("current_function", ""))
-        {
-            variables.Remove("return");
-        }
+        variables.Remove("return");
     }
 }

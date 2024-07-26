@@ -15,6 +15,7 @@ class MethodCallStatement : Statement
 
     public override void Execute(Dictionary<string, object> variables, Dictionary<string, FunctionStatement> functions)
     {
+        ESConvert converter = new ESConvert();
         object instance = variables[variable];
 
         if (instance is string str)
@@ -85,6 +86,6 @@ class MethodCallStatement : Statement
             }
         }
 
-        throw new Exception($"Method '{methodName}' not supported on object of type '{instance.GetType()}'.");
+        throw new Exception($"Method '{methodName}' not supported on object of type '{converter.Convert(instance)}'.");
     }
 }

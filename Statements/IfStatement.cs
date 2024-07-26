@@ -1,32 +1,49 @@
 class IfStatement : Statement
 {
-    private Expression condition;
-    private List<Statement> thenBlock;
-    private List<Statement> elseBlock;
+    public Expression Condition { get; }
+    public List<Statement> ThenBlock { get; }
+    public List<Statement> ElseBlock { get; }
+    public List<IfStatement> ElifStatements { get; }
 
-    public IfStatement(Expression condition, List<Statement> thenBlock, List<Statement> elseBlock)
+    public IfStatement(Expression condition, List<Statement> thenBlock, List<Statement> elseBlock, List<IfStatement> elifStatements)
     {
-        this.condition = condition;
-        this.thenBlock = thenBlock;
-        this.elseBlock = elseBlock;
+        Condition = condition;
+        ThenBlock = thenBlock;
+        ElseBlock = elseBlock;
+        ElifStatements = elifStatements;
     }
 
     public override void Execute(Dictionary<string, object> variables, Dictionary<string, FunctionStatement> functions)
     {
-        bool conditionResult = Convert.ToBoolean(condition.Evaluate(variables, functions));
-
-        if (conditionResult)
+        if (Convert.ToBoolean(Condition.Evaluate(variables, functions)))
         {
-            foreach (var statement in thenBlock)
+            foreach (var statement in ThenBlock)
             {
                 statement.Execute(variables, functions);
             }
         }
-        else if (elseBlock != null)
+        else
         {
-            foreach (var statement in elseBlock)
+            bool elifExecuted = false;
+            foreach (var elif in ElifStatements)
             {
-                statement.Execute(variables, functions);
+                if (Convert.ToBoolean(elif.Condition.Evaluate(variables, functions)))
+                {
+                    foreach (var statement in elif.ThenBlock)
+                    {
+                        statement.Execute(variables, functions);
+                    }
+                    elifExecuted = true;
+                    break;
+                }
+            }
+
+            if (!elifExecuted && ElseBlock != null)
+            {
+                foreach (var statement in ElseBlock)
+                {
+                    statement.Execute(variables, functions);
+                }
             }
         }
     }

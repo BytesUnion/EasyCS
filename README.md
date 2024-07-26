@@ -3,6 +3,7 @@
  
  EasyScript is a ~~powerful~~ programming language with **easy syntax**✨
  
- [Telegram](https://t.me/EasyScript) / [Telegram chat](https://t.me/EasyScriptChat) / [Telegram chat (Ukrainian)](https://t.me/EasyScriptChatUa)
+ [Telegram](https:
+ t.me/EasyScript) / [Telegram chat](https://t.me/EasyScriptChat) / [Telegram chat (Ukrainian)](https://t.me/EasyScriptChatUa)
  
  [Discord](https://discord.gg/rgRFKhkhrK)

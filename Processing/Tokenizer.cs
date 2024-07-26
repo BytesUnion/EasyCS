@@ -5,8 +5,7 @@ public static class Tokenizer
 {
     public static List<string> Tokenize(string script)
     {
-        string pattern = @"\s+|([=+\-*/()><]=|!=|&&|\|\||
-|\*\*)|([A-Za-z_][A-Za-z0-9_]*)|(\""[^\""]*\"")|(\'[^']*\'|\d+(\.\d*)?|\.\d+)|(\[|\]|\{|\}|,|:|\S)";
+        string pattern = @"\s+|([=+\-*/()><]=|!=|&&|\|\||//|\*\*)|([A-Za-z_][A-Za-z0-9_]*)|(\""[^\""]*\"")|(\'[^']*\'|\d+(\.\d*)?|\.\d+)|(\[|\]|\{|\}|,|:|\S)";
 
         var lines = script.Split('\n');
 

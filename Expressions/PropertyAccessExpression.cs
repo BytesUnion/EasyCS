@@ -12,7 +12,6 @@
     public override object Evaluate(Dictionary<string, object> variables, Dictionary<string, FunctionStatement> functions)
     {
         var targetValue = Target.Evaluate(variables, functions);
-
         if (targetValue is EasyScriptObject obj)
         {
             return obj[PropertyName];

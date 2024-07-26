@@ -4,14 +4,17 @@ class Interpreter
 {
     private string currentFile;
     private int currentLine;
-    private Dictionary<string, object> variables = new Dictionary<string, object>();
-    private Dictionary<string, FunctionStatement> functions = new Dictionary<string, FunctionStatement>();
-    private HashSet<string> keywords = new HashSet<string> { "print", "if", "elif", "else", "endf", "True", "False", "f", "endf", "return", "for", "to", "do", "endfor", "while", "endwhile", "in", "break", "class", "endclass", "init", "endinit" };
+    public Dictionary<string, object> variables = new Dictionary<string, object>();
+    public Dictionary<string, FunctionStatement> functions = new Dictionary<string, FunctionStatement>();
+    public Dictionary<string, bool> SharedVariables = new Dictionary<string, bool>();
+    private Dictionary<string, EasyScriptClass> moduleAliases = new Dictionary<string, EasyScriptClass>();
+    private HashSet<string> keywords = new HashSet<string> { "print", "if", "elif", "else", "endf", "True", "False", "f", "endf", "return", "for", "to", "do", "endfor", "while", "endwhile", "in", "break", "class", "endclass", "init", "endinit", "from", "use", "share", "load", "as" };
 
     public Interpreter(string filename)
     {
         currentFile = filename;
     }
+
     public void Execute(string script)
     {
         currentLine = 1;
@@ -22,13 +25,24 @@ class Interpreter
 
             foreach (var statement in statements)
             {
-                try
+                if (statement is ImportStatement importStmt)
                 {
-                    statement.Execute(variables, functions);
+                    ImportItems(importStmt.FileName, importStmt.ImportedItems, importStmt.ImportAll);
                 }
-                catch (Exception ex)
+            }
+
+            foreach (var statement in statements)
+            {
+                if (!(statement is ImportStatement))
                 {
-                    EasyScriptException.ThrowScriptError(currentFile, statement.LineNumber, ex.Message);
+                    try
+                    {
+                        statement.Execute(variables, functions);
+                    }
+                    catch (Exception ex)
+                    {
+                        EasyScriptException.ThrowScriptError(currentFile, statement.LineNumber, ex.Message);
+                    }
                 }
             }
         }
@@ -40,6 +54,80 @@ class Interpreter
         {
             EasyScriptException.ThrowScriptError(currentFile, currentLine, $"Unexpected error: {ex.Message}");
         }
+    }
+
+    private void ImportItems(string fileName, List<string> importedItems, bool importAll)
+    {
+        try
+        {
+            string script = File.ReadAllText(fileName);
+            Interpreter moduleInterpreter = new Interpreter(fileName);
+            moduleInterpreter.Execute(script);
+
+            foreach (var pair in moduleInterpreter.variables)
+            {
+                if (importAll || importedItems.Contains(pair.Key))
+                {
+                    if (moduleInterpreter.SharedVariables.ContainsKey(pair.Key))
+                    {
+                        if (pair.Value is EasyScriptClass classObj)
+                        {
+                            variables[pair.Key] = new EasyScriptClass(classObj.ClassName, classObj.ParentClass, GetClassBody(classObj));
+                        }
+                        else
+                        {
+                            variables[pair.Key] = pair.Value;
+                        }
+                    }
+                }
+            }
+
+            foreach (var pair in moduleInterpreter.functions)
+            {
+                if ((importAll || importedItems.Contains(pair.Key)) && pair.Value.IsShared)
+                {
+                    functions[pair.Key] = pair.Value;
+                }
+            }
+
+            if (!importAll)
+            {
+                foreach (var itemName in importedItems)
+                {
+                    if (!variables.ContainsKey(itemName) && !functions.ContainsKey(itemName))
+                    {
+                        throw new Exception($"Item '{itemName}' not found or not shared in module '{fileName}'");
+                    }
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            throw new Exception($"Error importing from '{fileName}': {ex.Message}");
+        }
+    }
+
+
+    private List<Statement> GetClassBody(EasyScriptClass classObj)
+    {
+        var body = new List<Statement>();
+
+        foreach (var prop in classObj.Properties)
+        {
+            body.Add(new AssignmentStatement(prop.Key, new ConstantExpression(prop.Value)));
+        }
+
+        foreach (var method in classObj.Methods)
+        {
+            body.Add(method.Value);
+        }
+
+        if (classObj.Init.TryGetValue("__init__", out var init))
+        {
+            body.Add(init);
+        }
+
+        return body;
     }
 
     private List<Statement> Parse(List<string> tokens, string originalScript)
@@ -87,16 +175,9 @@ class Interpreter
             Expect(tokens, ref i, ")");
             return new PrintStatement(expr);
         }
-        else if (tokens[i] == "if" || tokens[i] == "elif")
+        else if (tokens[i] == "if")
         {
-            bool isElseIf = tokens[i] == "elif";
-            i++;
-            Expect(tokens, ref i, "(");
-            Expression condition = ParseExpression(tokens, ref i);
-            Expect(tokens, ref i, ")");
-            List<Statement> thenBlock = ParseBlock(tokens, ref i, "else", "elif", "endif");
-            List<Statement> elseBlock = ParseElseBlock(tokens, ref i);
-            return new IfStatement(condition, thenBlock, elseBlock);
+            return ParseIfStatement(tokens, ref i);
         }
         else if (tokens[i] == "else")
         {
@@ -126,7 +207,7 @@ class Interpreter
             Expect(tokens, ref i, ")");
             List<Statement> body = ParseBlock(tokens, ref i, "endf");
             Expect(tokens, ref i, "endf");
-            return new FunctionStatement(functionName, parameters, body);
+            return new FunctionStatement(functionName, parameters, body, new Dictionary<string, object>(variables));
         }
         else if (tokens[i] == "init")
         {
@@ -227,15 +308,66 @@ class Interpreter
         {
             i++;
             string className = tokens[i++];
-            string baseClassName = null;
+            Expression baseClassExpression = null;
             if (i < tokens.Count && tokens[i] == "extends")
             {
                 i++;
-                baseClassName = tokens[i++];
+                baseClassExpression = ParseExpression(tokens, ref i);
             }
             List<Statement> body = ParseBlock(tokens, ref i, "endclass");
             Expect(tokens, ref i, "endclass");
-            return new ClassStatement(className, baseClassName, body);
+            return new ClassStatement(className, baseClassExpression, body);
+        }
+        else if (tokens[i] == "share")
+        {
+            i++;
+            Expect(tokens, ref i, "(");
+            List<string> importedItems = new List<string>();
+            while (i < tokens.Count && tokens[i] != ")")
+            {
+                importedItems.Add(tokens[i++]);
+                if (i < tokens.Count && tokens[i] == ",")
+                {
+                    i++;
+                }
+            }
+            Expect(tokens, ref i, ")");
+            return new ShareStatement(importedItems, SharedVariables);
+        }
+        else if (tokens[i] == "from")
+        {
+            i++;
+            string fileName = tokens[i++].Trim('"');
+            Expect(tokens, ref i, "use");
+
+            if (tokens[i] == "*")
+            {
+                i++;
+                return new ImportStatement(fileName, new List<string>(), true);
+            }
+            else
+            {
+                Expect(tokens, ref i, "{");
+                List<string> importedItems = new List<string>();
+                while (i < tokens.Count && tokens[i] != "}")
+                {
+                    importedItems.Add(tokens[i++]);
+                    if (i < tokens.Count && tokens[i] == ",")
+                    {
+                        i++;
+                    }
+                }
+                Expect(tokens, ref i, "}");
+                return new ImportStatement(fileName, importedItems, false);
+            }
+        }
+        else if (tokens[i] == "load")
+        {
+            i++;
+            string fileName = tokens[i++].Trim('"');
+            Expect(tokens, ref i, "as");
+            string alias = tokens[i++];
+            return new LoadStatement(fileName, alias);
         }
         else if (char.IsLetter(tokens[i][0]))
         {
@@ -335,8 +467,6 @@ class Interpreter
         throw new Exception($"Invalid statement starting with '{tokens[i]}'");
     }
 
-
-
     private List<Statement> ParseBlock(List<string> tokens, ref int i, params string[] terminators)
     {
         List<Statement> block = new List<Statement>();
@@ -349,34 +479,76 @@ class Interpreter
 
     private List<Statement> ParseElseBlock(List<string> tokens, ref int i)
     {
-        List<Statement> elseBlock = new List<Statement>();
-        if (i < tokens.Count && tokens[i] == "else")
+        if (i < tokens.Count && (tokens[i] == "else" || tokens[i] == "elif"))
         {
-            elseBlock.Add(ParseStatement(tokens, ref i));
+            return ParseBlock(tokens, ref i, "endif");
         }
-        else if (i < tokens.Count && tokens[i] == "elif")
-        {
-            elseBlock.Add(ParseStatement(tokens, ref i));
-        }
-        return elseBlock;
+        return null;
     }
+
 
     private Expression ParseExpression(List<string> tokens, ref int i)
     {
+        return ParseLogicalOr(tokens, ref i);
+    }
+
+    private Expression ParseLogicalOr(List<string> tokens, ref int i)
+    {
+        Expression left = ParseLogicalAnd(tokens, ref i);
+        while (i < tokens.Count && tokens[i] == "||")
+        {
+            string op = tokens[i++];
+            Expression right = ParseLogicalAnd(tokens, ref i);
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseLogicalAnd(List<string> tokens, ref int i)
+    {
+        Expression left = ParseEquality(tokens, ref i);
+        while (i < tokens.Count && tokens[i] == "&&")
+        {
+            string op = tokens[i++];
+            Expression right = ParseEquality(tokens, ref i);
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseEquality(List<string> tokens, ref int i)
+    {
+        Expression left = ParseRelational(tokens, ref i);
+        while (i < tokens.Count && (tokens[i] == "==" || tokens[i] == "!="))
+        {
+            string op = tokens[i++];
+            Expression right = ParseRelational(tokens, ref i);
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseRelational(List<string> tokens, ref int i)
+    {
+        Expression left = ParseArithmetic(tokens, ref i);
+        while (i < tokens.Count && (tokens[i] == ">" || tokens[i] == "<" || tokens[i] == ">=" || tokens[i] == "<="))
+        {
+            string op = tokens[i++];
+            Expression right = ParseArithmetic(tokens, ref i);
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseArithmetic(List<string> tokens, ref int i)
+    {
         Expression left = ParseTerm(tokens, ref i);
-        while (i < tokens.Count && (tokens[i] == "//" || tokens[i] == "**" || tokens[i] == "+" || tokens[i] == "-" || tokens[i] == ">" || tokens[i] == "<" || tokens[i] == ">=" || tokens[i] == "<=" || tokens[i] == "==" || tokens[i] == "!=" || tokens[i] == "&&" || tokens[i] == "||" || tokens[i] == "in" || tokens[i] == "%"))
+
+        while (i < tokens.Count && (tokens[i] == "+" || tokens[i] == "-"))
         {
             string op = tokens[i++];
             Expression right = ParseTerm(tokens, ref i);
             left = new BinaryExpression(left, op, right);
-        }
-
-        while (i < tokens.Count && tokens[i] == "[")
-        {
-            i++;
-            Expression key = ParseExpression(tokens, ref i);
-            Expect(tokens, ref i, "]");
-            left = new IndexOrPropertyAccessExpression(left, key);
         }
 
         return left;
@@ -384,14 +556,68 @@ class Interpreter
 
     private Expression ParseTerm(List<string> tokens, ref int i)
     {
+        Expression left = ParsePower(tokens, ref i);
+        while (i < tokens.Count && (tokens[i] == "*" || tokens[i] == "/" || tokens[i] == "%" || tokens[i] == "//"))
+        {
+            string op = tokens[i++];
+            Expression right = ParsePower(tokens, ref i);
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParsePower(List<string> tokens, ref int i)
+    {
         Expression left = ParseFactor(tokens, ref i);
-        while (i < tokens.Count && (tokens[i] == "//" || tokens[i] == "**" || tokens[i] == "*" || tokens[i] == "/" || tokens[i] == "+" || tokens[i] == "-" || tokens[i] == ">" || tokens[i] == "<" || tokens[i] == ">=" || tokens[i] == "<=" || tokens[i] == "==" || tokens[i] == "!=" || tokens[i] == "%"))
+        while (i < tokens.Count && tokens[i] == "**")
         {
             string op = tokens[i++];
             Expression right = ParseFactor(tokens, ref i);
             left = new BinaryExpression(left, op, right);
         }
         return left;
+    }
+
+    private Statement ParseIfStatement(List<string> tokens, ref int i)
+    {
+        i++;
+        Expect(tokens, ref i, "(");
+        Expression condition = ParseExpression(tokens, ref i);
+        Expect(tokens, ref i, ")");
+
+        List<Statement> thenBlock = ParseBlock(tokens, ref i, "elif", "else", "endif");
+        List<IfStatement> elifStatements = new List<IfStatement>();
+        List<Statement> elseBlock = null;
+
+        while (i < tokens.Count)
+        {
+            if (tokens[i] == "elif")
+            {
+                i++;
+                Expect(tokens, ref i, "(");
+                Expression elifCondition = ParseExpression(tokens, ref i);
+                Expect(tokens, ref i, ")");
+                List<Statement> elifBlock = ParseBlock(tokens, ref i, "elif", "else", "endif");
+                elifStatements.Add(new IfStatement(elifCondition, elifBlock, null, new List<IfStatement>()));
+            }
+            else if (tokens[i] == "else")
+            {
+                i++;
+                elseBlock = ParseBlock(tokens, ref i, "endif");
+                break;
+            }
+            else if (tokens[i] == "endif")
+            {
+                i++;
+                break;
+            }
+            else
+            {
+                throw new Exception($"Unexpected token '{tokens[i]}' in if statement");
+            }
+        }
+
+        return new IfStatement(condition, thenBlock, elseBlock, elifStatements);
     }
 
     private Expression ParseFactor(List<string> tokens, ref int i)
@@ -448,7 +674,15 @@ class Interpreter
         else if (tokens[i] == "new")
         {
             i++;
-            string className = tokens[i++];
+            var classPath = new List<string>();
+            classPath.Add(tokens[i++]);
+
+            while (i < tokens.Count && tokens[i] == ".")
+            {
+                i++;
+                classPath.Add(tokens[i++]);
+            }
+
             Expect(tokens, ref i, "(");
             var arguments = new List<Expression>();
             while (tokens[i] != ")")
@@ -461,7 +695,7 @@ class Interpreter
                 }
             }
             Expect(tokens, ref i, ")");
-            result = new NewExpression(className, arguments);
+            result = new NewExpression(classPath, arguments);
         }
         else if (tokens[i] == "{")
         {

@@ -20,9 +20,20 @@ class MethodCallExpression : Expression
 
         ESConvert converter = new ESConvert();
 
-        if (targetObject is EasyScriptObject eso && eso.ContainsKey("__class__"))
+        if (targetObject is EasyScriptObject eso)
         {
-            return eso.CallMethod(methodName, arguments, variables, functions);
+            if (eso.ContainsKey("__class__"))
+            {
+                return eso.CallMethod(methodName, arguments, variables, functions);
+            }
+            else if (eso.ContainsKey(methodName))
+            {
+                object nestedItem = eso[methodName];
+                if (nestedItem is EasyScriptClass nestedClass)
+                {
+                    return nestedClass.Instantiate(arguments, variables, functions);
+                }
+            }
         }
 
         MethodInfo methodInfo = targetObject.GetType().GetMethod(methodName, BindingFlags.Instance | BindingFlags.Public);
@@ -35,11 +46,7 @@ class MethodCallExpression : Expression
             }
         }
 
-        object[] evaluatedArguments = new object[arguments.Count];
-        for (int i = 0; i < arguments.Count; i++)
-        {
-            evaluatedArguments[i] = arguments[i].Evaluate(variables, functions);
-        }
+        object[] evaluatedArguments = arguments.Select(arg => arg.Evaluate(variables, functions)).ToArray();
 
         if (methodInfo.IsDefined(typeof(ExtensionAttribute), false))
         {

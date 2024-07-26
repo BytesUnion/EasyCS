@@ -6,6 +6,7 @@ class EasyScriptClass
     public Dictionary<string, InitStatement> Init { get; } = new Dictionary<string, InitStatement>();
     public Dictionary<string, object> Properties { get; } = new Dictionary<string, object>();
     public Dictionary<string, FunctionStatement> Methods { get; } = new Dictionary<string, FunctionStatement>();
+    public Dictionary<string, EasyScriptClass> Classes { get; } = new Dictionary<string, EasyScriptClass>();
 
     public EasyScriptClass(string className, EasyScriptClass baseClassName, List<Statement> body)
     {
@@ -21,6 +22,10 @@ class EasyScriptClass
             foreach (var method in ParentClass.Methods)
             {
                 Methods[method.Key] = method.Value;
+            }
+            foreach (var classs in ParentClass.Classes)
+            {
+                Classes[classs.Key] = classs.Value;
             }
         }
 
@@ -54,6 +59,10 @@ class EasyScriptClass
             else if (statement is InitStatement init)
             {
                 Init["__init__"] = init;
+            }
+            else if (statement is ClassStatement anotherclass)
+            {
+                Classes[anotherclass.ClassName] = new EasyScriptClass(anotherclass.ClassName, null, anotherclass.Body);
             }
         }
     }
@@ -101,6 +110,11 @@ class EasyScriptClass
             instance[method.Key] = method.Value;
         }
 
+        foreach (var nestedClass in Classes)
+        {
+            instance[nestedClass.Key] = nestedClass.Value;
+        }
+
         if (Init.TryGetValue("__init__", out var init))
         {
             List<object> evaluatedArguments = arguments.Select(arg => arg.Evaluate(variables, functions)).ToList();
@@ -110,7 +124,4 @@ class EasyScriptClass
 
         return instance;
     }
-
-
-
 }

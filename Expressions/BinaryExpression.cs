@@ -11,7 +11,7 @@ class BinaryExpression : Expression
         this.right = right;
     }
 
-    private object EvaluateLogical(dynamic leftValue, dynamic rightValue)
+    private object EvaluateLogical(object leftValue, object rightValue)
     {
         if (op == "||")
         {
@@ -27,6 +27,16 @@ class BinaryExpression : Expression
     public override object Evaluate(Dictionary<string, object> variables, Dictionary<string, FunctionStatement> functions)
     {
         var leftValue = left.Evaluate(variables, functions);
+
+        if (op == "||" && Convert.ToBoolean(leftValue))
+        {
+            return true;
+        }
+        else if (op == "&&" && !Convert.ToBoolean(leftValue))
+        {
+            return false;
+        }
+
         var rightValue = right.Evaluate(variables, functions);
 
         if (op == "||" || op == "&&")
@@ -85,36 +95,20 @@ class BinaryExpression : Expression
                 if ((leftValue is int == true && rightValue is double == true) == false && (leftValue is double == true && rightValue is int == true) == false && (leftValue is int == true && rightValue is int == true) == false && (leftValue is double == true && rightValue is double == true) == false)
                     throw new Exception($"Can't use '//' for operands of type '{converter.Convert(leftValue)} ' & ' {converter.Convert(rightValue)}'");
                 if (Convert.ToInt32(rightValue) == 0) throw new Exception("Uh-oh! You tried to divide by zero. That's not possible.");
-                if (leftValue is int leftIntVal5 && rightValue is int rightIntVal5)
-                    return Math.Floor((double)leftIntVal5 / rightIntVal5);
-                return Math.Floor(Convert.ToDouble(leftValue) / Convert.ToDouble(rightValue));
-            case "**":
-                if ((leftValue is int == true && rightValue is double == true) == false && (leftValue is double == true && rightValue is int == true) == false && (leftValue is int == true && rightValue is int == true) == false && (leftValue is double == true && rightValue is double == true) == false)
-                    throw new Exception($"Can't use '**' for operands of type '{converter.Convert(leftValue)} ' & ' {converter.Convert(rightValue)}'");
-                if (leftValue is int leftIntVal6 && rightValue is int rightIntVal6)
-                    return (int)Math.Pow(leftIntVal6, rightIntVal6);
-                return Math.Pow(Convert.ToDouble(leftValue), Convert.ToDouble(rightValue));
+                if (leftValue is int leftIntVal4 && rightValue is int rightIntVal4)
+                    return leftIntVal4 / rightIntVal4;
+                return Convert.ToInt32(Math.Floor(Convert.ToDouble(leftValue) / Convert.ToDouble(rightValue)));
             case "%":
                 if ((leftValue is int == true && rightValue is double == true) == false && (leftValue is double == true && rightValue is int == true) == false && (leftValue is int == true && rightValue is int == true) == false && (leftValue is double == true && rightValue is double == true) == false)
-                    throw new Exception($"Can't use '%' for operands of type '{converter.Convert(leftValue)}' & '{converter.Convert(rightValue)}'");
-                if (leftValue is int leftIntVal4 && rightValue is int rightIntVal4)
-                    return leftIntVal4 % rightIntVal4;
+                    throw new Exception($"Can't use '%' for operands of type '{converter.Convert(leftValue)} ' & ' {converter.Convert(rightValue)}'");
+                if (Convert.ToInt32(rightValue) == 0) throw new Exception("Uh-oh! You tried to divide by zero. That's not possible.");
                 return Convert.ToDouble(leftValue) % Convert.ToDouble(rightValue);
-            case "in":
-                if (leftValue is string leftStr3 && rightValue is string rightStr3) {
-                    return rightStr3.Contains(leftStr3);
-                }
-                else if (rightValue is EasyScriptList esl)
-                {
-                    return esl.Contains(leftValue);
-                }
-                else if (rightValue is EasyScriptObject eso)
-                {
-                    return eso.ContainsKey(leftValue.ToString());
-                }
-                throw new Exception("Whoops! You can only use 'in' with collections or strings. Try again!");
+            case "**":
+                if ((leftValue is int == true && rightValue is double == true) == false && (leftValue is double == true && rightValue is int == true) == false && (leftValue is int == true && rightValue is int == true) == false && (leftValue is double == true && rightValue is double == true) == false)
+                    throw new Exception($"Can't use '**' for operands of type '{converter.Convert(leftValue)}' & '{converter.Convert(rightValue)}'");
+                return Math.Pow(Convert.ToDouble(leftValue), Convert.ToDouble(rightValue));
             default:
-                throw new Exception($"Oops! The operator '{op}' isn't supported.");
+                throw new Exception($"Unknown operator '{op}'");
         }
     }
 }
