@@ -142,8 +142,11 @@ class Interpreter
             try
             {
                 Statement parsedStatement = ParseStatement(tokens, ref i);
-                parsedStatement.LineNumber = currentTokenLine;
-                statements.Add(parsedStatement);
+                if (parsedStatement != null)
+                {
+                    parsedStatement.LineNumber = currentTokenLine;
+                    statements.Add(parsedStatement);
+                }
 
                 while (currentTokenLine < lines.Length && i < tokens.Count &&
                        originalScript.Substring(0, originalScript.IndexOf(tokens[i])).Split('\n').Length > currentTokenLine)
@@ -162,6 +165,12 @@ class Interpreter
     private Statement ParseStatement(List<string> tokens, ref int i)
     {
         currentLine++;
+        if (i < tokens.Count && tokens[i].StartsWith(">>"))
+        {
+            i++;
+            return null;
+        }
+
         if (tokens[i] == "break")
         {
             i++;
