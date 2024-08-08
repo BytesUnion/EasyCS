@@ -107,6 +107,15 @@ class BinaryExpression : Expression
                 if ((leftValue is int == true && rightValue is double == true) == false && (leftValue is double == true && rightValue is int == true) == false && (leftValue is int == true && rightValue is int == true) == false && (leftValue is double == true && rightValue is double == true) == false)
                     throw new Exception($"Can't use '**' for operands of type '{converter.Convert(leftValue)}' & '{converter.Convert(rightValue)}'");
                 return Math.Pow(Convert.ToDouble(leftValue), Convert.ToDouble(rightValue));
+            case "in":
+                if (rightValue is EasyScriptList esl) {
+                    return esl.Contains(leftValue);
+                } else if (rightValue is EasyScriptObject eso && leftValue is String leftStrValue)
+                {
+                    return eso.ContainsKey(leftStrValue);
+                } else {
+                    throw new Exception("Can't use 'in' operator for data types except lists and objects.");
+                }
             default:
                 throw new Exception($"Unknown operator '{op}'");
         }

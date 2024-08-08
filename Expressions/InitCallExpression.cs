@@ -19,11 +19,10 @@
         List<Statement> Body = initStat.Body;
         Dictionary<string, object> localVariables = new Dictionary<string, object>();
 
-        // localVariables["cur"] = this.esClass;
         localVariables["cur"] = this.esObject;
-        localVariables["super"] = this.esObject["__parent__"];
+        localVariables["super"] = this.esObject.ContainsKey("super") ? this.esObject["super"] : null;
 
-        if (this.esObject.ContainsKey("super") && this.esObject["super"] is EasyScriptClass parentClass)
+        if (localVariables["super"] is EasyScriptClass parentClass)
         {
             var parentInitStatement = parentClass.Init.GetValueOrDefault("__init__");
             if (parentInitStatement != null)

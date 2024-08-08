@@ -3,6 +3,8 @@
     public Dictionary<string, InitStatement> inits;
     public List<string> Parameters { get; }
     public List<Statement> Body { get; }
+    public bool IsShared { get; set; }
+
 
     public InitStatement(List<string> parameters, List<Statement> body)
     {

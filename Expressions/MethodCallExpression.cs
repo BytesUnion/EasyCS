@@ -18,20 +18,38 @@ class MethodCallExpression : Expression
     {
         object targetObject = target.Evaluate(variables, functions);
 
-        ESConvert converter = new ESConvert();
-
         if (targetObject is EasyScriptObject eso)
         {
+
             if (eso.ContainsKey("__class__"))
             {
                 return eso.CallMethod(methodName, arguments, variables, functions);
-            }
-            else if (eso.ContainsKey(methodName))
+            } else if (eso.ContainsKey(methodName))
             {
-                object nestedItem = eso[methodName];
-                if (nestedItem is EasyScriptClass nestedClass)
+                object method = eso[methodName];
+                if (method is FunctionStatement function)
                 {
-                    return nestedClass.Instantiate(arguments, variables, functions);
+                    var localVariables = new Dictionary<string, object>(variables);
+                    var evaluatedArgs = arguments.Select(arg => arg.Evaluate(variables, functions)).ToArray();
+
+                    for (int i = 0; i < function.Parameters.Count; i++)
+                    {
+                        localVariables[function.Parameters[i]] = evaluatedArgs[i];
+                    }
+
+                    foreach (var statement in function.Body)
+                    {
+                        statement.Execute(localVariables, functions);
+                        if (localVariables.ContainsKey("return"))
+                        {
+                            return localVariables["return"];
+                        }
+                    }
+                    return null;
+                } 
+                else
+                {
+                    throw new Exception($"The method '{methodName}' is not a valid function.");
                 }
             }
         }
@@ -42,21 +60,20 @@ class MethodCallExpression : Expression
             methodInfo = GetExtensionMethod(targetObject.GetType(), methodName);
             if (methodInfo == null)
             {
-                throw new Exception($"The method '{methodName}' doesn't exist on objects of type '{converter.Convert(targetObject)}'. Check your method name and object type!");
+                throw new Exception($"The method '{methodName}' doesn't exist on objects of type '{targetObject.GetType().Name}'. Check your method name and object type!");
             }
         }
 
-        object[] evaluatedArguments = arguments.Select(arg => arg.Evaluate(variables, functions)).ToArray();
-
+        object[] args = arguments.Select(arg => arg.Evaluate(variables, functions)).ToArray();
         if (methodInfo.IsDefined(typeof(ExtensionAttribute), false))
         {
-            var parameters = new object[evaluatedArguments.Length + 1];
+            var parameters = new object[args.Length + 1];
             parameters[0] = targetObject;
-            Array.Copy(evaluatedArguments, 0, parameters, 1, evaluatedArguments.Length);
+            Array.Copy(args, 0, parameters, 1, args.Length);
             return methodInfo.Invoke(null, parameters);
         }
 
-        return methodInfo.Invoke(targetObject, evaluatedArguments);
+        return methodInfo.Invoke(targetObject, args);
     }
 
     private MethodInfo GetExtensionMethod(Type targetType, string methodName)

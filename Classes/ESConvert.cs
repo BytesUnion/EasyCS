@@ -19,6 +19,8 @@
                 return "object";
             case "EasyScriptClass":
                 return "class";
+            case "Boolean":
+                return "boolean";
             default:
                 throw new Exception($"Unsupported type: {type.Name}");
         }

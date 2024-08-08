@@ -11,12 +11,23 @@ class FunctionStatement : Statement
         Name = name;
         Parameters = parameters;
         Body = body;
-        OriginalContext = new Dictionary<string, object>(context);
+        OriginalContext = context != null ? new Dictionary<string, object>(context) : new Dictionary<string, object>();
         IsShared = false;
+    }
+
+    public static string DictionaryToString(Dictionary<string, object> dictionary)
+    {
+        List<string> entries = new List<string>();
+        foreach (var kvp in dictionary)
+        {
+            entries.Add($"{kvp.Key}: {kvp.Value}");
+        }
+        return "{" + string.Join(", ", entries) + "}";
     }
 
     public override void Execute(Dictionary<string, object> variables, Dictionary<string, FunctionStatement> functions)
     {
+        Console.WriteLine(DictionaryToString(OriginalContext));
         functions[Name] = this;
     }
 }

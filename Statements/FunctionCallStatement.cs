@@ -13,7 +13,7 @@ class FunctionCallStatement : Statement
     {
         if (!functions.ContainsKey(functionName))
         {
-            throw new Exception($"Function '{functionName}' not defined");
+            throw new Exception($"Function '{functionName}' is not defined");
         }
 
         FunctionStatement function = functions[functionName];

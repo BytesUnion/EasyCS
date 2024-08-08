@@ -1,14 +1,15 @@
-using System.Globalization;
+﻿using System.Globalization;
 
 class Interpreter
 {
     private string currentFile;
-    private int currentLine;
+    private List<Token> tokens;
+    private int currentTokenIndex;
     public Dictionary<string, object> variables = new Dictionary<string, object>();
     public Dictionary<string, FunctionStatement> functions = new Dictionary<string, FunctionStatement>();
     public Dictionary<string, bool> SharedVariables = new Dictionary<string, bool>();
     private Dictionary<string, EasyScriptClass> moduleAliases = new Dictionary<string, EasyScriptClass>();
-    private HashSet<string> keywords = new HashSet<string> { "print", "if", "elif", "else", "endf", "True", "False", "f", "endf", "return", "for", "to", "do", "endfor", "while", "endwhile", "in", "break", "class", "endclass", "init", "endinit", "from", "use", "share", "load", "as" };
+    private string script;
 
     public Interpreter(string filename)
     {
@@ -17,11 +18,13 @@ class Interpreter
 
     public void Execute(string script)
     {
-        currentLine = 1;
         try
         {
-            List<string> tokens = Tokenizer.Tokenize(script);
-            List<Statement> statements = Parse(tokens, script);
+            Lexer lexer = new Lexer(script);
+            tokens = lexer.TokenizeAll();
+            currentTokenIndex = 0;
+
+            List<Statement> statements = Parse();
 
             foreach (var statement in statements)
             {
@@ -41,7 +44,7 @@ class Interpreter
                     }
                     catch (Exception ex)
                     {
-                        EasyScriptException.ThrowScriptError(currentFile, statement.LineNumber, ex.Message);
+                        EasyScriptException.ThrowScriptError(currentFile, statement.LineNumber, statement.Column, script, ex.Message);
                     }
                 }
             }
@@ -52,7 +55,8 @@ class Interpreter
         }
         catch (Exception ex)
         {
-            EasyScriptException.ThrowScriptError(currentFile, currentLine, $"Unexpected error: {ex.Message}");
+            Console.WriteLine(ex.ToString());
+            EasyScriptException.ThrowScriptError(currentFile, CurrentToken.Line, CurrentToken.Column, script, $"Unexpected error: {ex.Message}");
         }
     }
 
@@ -68,25 +72,19 @@ class Interpreter
             {
                 if (importAll || importedItems.Contains(pair.Key))
                 {
-                    if (moduleInterpreter.SharedVariables.ContainsKey(pair.Key))
-                    {
-                        if (pair.Value is EasyScriptClass classObj)
-                        {
-                            variables[pair.Key] = new EasyScriptClass(classObj.ClassName, classObj.ParentClass, GetClassBody(classObj));
-                        }
-                        else
-                        {
-                            variables[pair.Key] = pair.Value;
-                        }
-                    }
+                    variables[pair.Key] = pair.Value;
                 }
             }
 
             foreach (var pair in moduleInterpreter.functions)
             {
-                if ((importAll || importedItems.Contains(pair.Key)) && pair.Value.IsShared)
+                if (importAll || importedItems.Contains(pair.Key))
                 {
                     functions[pair.Key] = pair.Value;
+                    if (moduleInterpreter.SharedVariables.ContainsKey(pair.Key))
+                    {
+                        SharedVariables[pair.Key] = true;
+                    }
                 }
             }
 
@@ -107,7 +105,6 @@ class Interpreter
         }
     }
 
-
     private List<Statement> GetClassBody(EasyScriptClass classObj)
     {
         var body = new List<Statement>();
@@ -124,733 +121,705 @@ class Interpreter
 
         if (classObj.Init.TryGetValue("__init__", out var init))
         {
+            if (functions.ContainsKey("__init__") && functions["__init__"].IsShared)
+            {
+                init.IsShared = true;
+            }
             body.Add(init);
         }
 
         return body;
     }
 
-    private List<Statement> Parse(List<string> tokens, string originalScript)
+    private List<Statement> Parse()
     {
         List<Statement> statements = new List<Statement>();
-        int i = 0;
-        string[] lines = originalScript.Split('\n');
-        int currentTokenLine = 1;
 
-        while (i < tokens.Count)
+        while (currentTokenIndex < tokens.Count && CurrentToken.Type != TokenType.EOF)
         {
             try
             {
-                Statement parsedStatement = ParseStatement(tokens, ref i);
+                Statement parsedStatement = ParseStatement();
                 if (parsedStatement != null)
                 {
-                    parsedStatement.LineNumber = currentTokenLine;
+                    parsedStatement.LineNumber = CurrentToken.Line;
+                    parsedStatement.Column = CurrentToken.Column;
                     statements.Add(parsedStatement);
-                }
-
-                while (currentTokenLine < lines.Length && i < tokens.Count &&
-                       originalScript.Substring(0, originalScript.IndexOf(tokens[i])).Split('\n').Length > currentTokenLine)
-                {
-                    currentTokenLine++;
                 }
             }
             catch (Exception ex)
             {
-                EasyScriptException.ThrowScriptError(currentFile, currentTokenLine, ex.Message);
+                EasyScriptException.ThrowScriptError(currentFile, CurrentToken.Line, CurrentToken.Column, script, ex.Message);
             }
         }
         return statements;
     }
 
-    private Statement ParseStatement(List<string> tokens, ref int i)
+
+    private Statement ParseStatement()
     {
-        currentLine++;
-        if (i < tokens.Count && tokens[i].StartsWith(">>"))
+        try
         {
-            i++;
+            if (Match(TokenType.Comment))
+            {
+                return null;
+            }
+
+            if (Match(TokenType.Keyword))
+            {
+                switch (PreviousToken.Value)
+                {
+                    case "break": return new BreakStatement();
+                    case "print": return ParsePrintStatement();
+                    case "if": return ParseIfStatement();
+                    case "f": return ParseFunctionStatement();
+                    case "init": return ParseInitStatement();
+                    case "return": return ParseReturnStatement();
+                    case "while": return ParseWhileStatement();
+                    case "for": return ParseForStatement();
+                    case "class": return ParseClassStatement();
+                    case "share": return ParseShareStatement();
+                    case "from": return ParseImportStatement();
+                    case "super": return ParseSuperStatement();
+                    case "load": return ParseLoadStatement();
+                }
+            }
+
+            if (Match(TokenType.Identifier))
+            {
+                return ParseAssignmentOrFunctionCall();
+            }
+
+            throw new Exception($"Unexpected token: {CurrentToken.Value}");
+        }
+        catch (Exception ex)
+        {
+            EasyScriptException.ThrowScriptError(currentFile, CurrentToken.Line, CurrentToken.Column, script, ex.Message);
             return null;
         }
-
-        if (tokens[i] == "break")
-        {
-            i++;
-            return new BreakStatement();
-        }
-        else if (tokens[i] == "print")
-        {
-            i++;
-            Expect(tokens, ref i, "(");
-            Expression expr = ParseExpression(tokens, ref i);
-            Expect(tokens, ref i, ")");
-            return new PrintStatement(expr);
-        }
-        else if (tokens[i] == "if")
-        {
-            return ParseIfStatement(tokens, ref i);
-        }
-        else if (tokens[i] == "else")
-        {
-            i++;
-            List<Statement> elseBlock = ParseBlock(tokens, ref i, "endif");
-            return new ElseStatement(elseBlock);
-        }
-        else if (tokens[i] == "endif")
-        {
-            i++;
-            return new EndIfStatement();
-        }
-        else if (tokens[i] == "f")
-        {
-            i++;
-            string functionName = tokens[i++];
-            List<string> parameters = new List<string>();
-            Expect(tokens, ref i, "(");
-            while (tokens[i] != ")")
-            {
-                parameters.Add(tokens[i++]);
-                if (tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, ")");
-            List<Statement> body = ParseBlock(tokens, ref i, "endf");
-            Expect(tokens, ref i, "endf");
-            return new FunctionStatement(functionName, parameters, body, new Dictionary<string, object>(variables));
-        }
-        else if (tokens[i] == "init")
-        {
-            i++;
-            List<string> parameters = new List<string>();
-            Expect(tokens, ref i, "(");
-            while (tokens[i] != ")")
-            {
-                parameters.Add(tokens[i++]);
-                if (tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, ")");
-            List<Statement> body = ParseBlock(tokens, ref i, "endinit");
-            Expect(tokens, ref i, "endinit");
-            return new InitStatement(parameters, body);
-        }
-        else if (tokens[i] == "super")
-        {
-            i++;
-            Expect(tokens, ref i, "(");
-            List<Expression> arguments = new List<Expression>();
-            while (tokens[i] != ")")
-            {
-                arguments.Add(ParseExpression(tokens, ref i));
-                if (tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, ")");
-            return new SuperMethodCallStatement("__init__", arguments);
-        }
-        else if (tokens[i] == "return")
-        {
-            i++;
-            Expression returnValue = ParseExpression(tokens, ref i);
-            return new ReturnStatement(returnValue);
-        }
-        else if (tokens[i] == "while")
-        {
-            i++;
-            Expect(tokens, ref i, "(");
-            Expression condition = ParseExpression(tokens, ref i);
-            Expect(tokens, ref i, ")");
-            Expect(tokens, ref i, "do");
-            List<Statement> body = ParseBlock(tokens, ref i, "endwhile");
-            Expect(tokens, ref i, "endwhile");
-            return new WhileStatement(condition, body);
-        }
-        else if (tokens[i] == "for")
-        {
-            i++;
-            Expect(tokens, ref i, "(");
-            if (tokens[i + 1] == "in")
-            {
-                string variable = tokens[i++];
-                Expect(tokens, ref i, "in");
-                Expression iterableExpression = ParseExpression(tokens, ref i);
-                Expect(tokens, ref i, ")");
-                Expect(tokens, ref i, "do");
-                List<Statement> body = ParseBlock(tokens, ref i, "endfor");
-                Expect(tokens, ref i, "endfor");
-                return new ForEachStatement(variable, iterableExpression, body);
-            }
-            else if (tokens[i + 1] == "=")
-            {
-                string variable = tokens[i++];
-                Expect(tokens, ref i, "=");
-                Expression startValue = ParseExpression(tokens, ref i);
-                Expect(tokens, ref i, "to");
-                Expression endValue = ParseExpression(tokens, ref i);
-                Expect(tokens, ref i, ")");
-                Expect(tokens, ref i, "do");
-                List<Statement> body = ParseBlock(tokens, ref i, "endfor");
-                Expect(tokens, ref i, "endfor");
-                return new ForStatement(variable, startValue, endValue, body);
-            }
-            else if (tokens[i] == "(")
-            {
-                i++;
-                string firstVariable = tokens[i++];
-                Expect(tokens, ref i, ",");
-                string secondVariable = tokens[i++];
-                Expect(tokens, ref i, ")");
-                Expect(tokens, ref i, "in");
-                Expression iterableExpression = ParseExpression(tokens, ref i);
-                Expect(tokens, ref i, ")");
-                Expect(tokens, ref i, "do");
-                List<Statement> body = ParseBlock(tokens, ref i, "endfor");
-                Expect(tokens, ref i, "endfor");
-                return new ForEachKVStatement(firstVariable, secondVariable, iterableExpression, body);
-            }
-        }
-        else if (tokens[i] == "class")
-        {
-            i++;
-            string className = tokens[i++];
-            Expression baseClassExpression = null;
-            if (i < tokens.Count && tokens[i] == "extends")
-            {
-                i++;
-                baseClassExpression = ParseExpression(tokens, ref i);
-            }
-            List<Statement> body = ParseBlock(tokens, ref i, "endclass");
-            Expect(tokens, ref i, "endclass");
-            return new ClassStatement(className, baseClassExpression, body);
-        }
-        else if (tokens[i] == "share")
-        {
-            i++;
-            Expect(tokens, ref i, "(");
-            List<string> importedItems = new List<string>();
-            while (i < tokens.Count && tokens[i] != ")")
-            {
-                importedItems.Add(tokens[i++]);
-                if (i < tokens.Count && tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, ")");
-            return new ShareStatement(importedItems, SharedVariables);
-        }
-        else if (tokens[i] == "from")
-        {
-            i++;
-            string fileName = tokens[i++].Trim('"');
-            Expect(tokens, ref i, "use");
-
-            if (tokens[i] == "*")
-            {
-                i++;
-                return new ImportStatement(fileName, new List<string>(), true);
-            }
-            else
-            {
-                Expect(tokens, ref i, "{");
-                List<string> importedItems = new List<string>();
-                while (i < tokens.Count && tokens[i] != "}")
-                {
-                    importedItems.Add(tokens[i++]);
-                    if (i < tokens.Count && tokens[i] == ",")
-                    {
-                        i++;
-                    }
-                }
-                Expect(tokens, ref i, "}");
-                return new ImportStatement(fileName, importedItems, false);
-            }
-        }
-        else if (tokens[i] == "load")
-        {
-            i++;
-            string fileName = tokens[i++].Trim('"');
-            Expect(tokens, ref i, "as");
-            string alias = tokens[i++];
-            return new LoadStatement(fileName, alias);
-        }
-        else if (char.IsLetter(tokens[i][0]))
-        {
-            string identifier = tokens[i++];
-            Expression target = new VariableExpression(identifier);
-
-            while (i < tokens.Count && (tokens[i] == "[" || tokens[i] == "."))
-            {
-                if (tokens[i] == "[")
-                {
-                    i++;
-                    Expression key = ParseExpression(tokens, ref i);
-                    Expect(tokens, ref i, "]");
-                    target = new IndexAccessExpression(target, key);
-                }
-                else if (tokens[i] == ".")
-                {
-                    i++;
-                    string propertyName = tokens[i++];
-
-                    if (i < tokens.Count && tokens[i] == "(")
-                    {
-                        i++;
-                        List<Expression> arguments = new List<Expression>();
-                        while (tokens[i] != ")")
-                        {
-                            arguments.Add(ParseExpression(tokens, ref i));
-                            if (tokens[i] == ",")
-                            {
-                                i++;
-                            }
-                        }
-                        Expect(tokens, ref i, ")");
-                        return new MethodCallStatement(identifier, propertyName, arguments);
-                    }
-                    else
-                    {
-                        target = new IndexAccessExpression(target, new StringExpression(propertyName));
-                    }
-                }
-            }
-
-            if (tokens[i] == "=")
-            {
-                i++;
-                Expression value = ParseExpression(tokens, ref i);
-                if (target is VariableExpression varExpr)
-                {
-                    return new AssignmentStatement(varExpr.Name, value);
-                }
-                else if (target is IndexAccessExpression indexExpr)
-                {
-                    return new IndexAssignmentStatement(indexExpr.Target, indexExpr.Key, value);
-                }
-                else
-                {
-                    throw new Exception("Invalid assignment target");
-                }
-            }
-            else if (tokens[i] == "(")
-            {
-                i++;
-                List<Expression> arguments = new List<Expression>();
-                while (tokens[i] != ")")
-                {
-                    arguments.Add(ParseExpression(tokens, ref i));
-                    if (tokens[i] == ",")
-                    {
-                        i++;
-                    }
-                }
-                Expect(tokens, ref i, ")");
-                return new FunctionCallStatement(identifier, arguments);
-            }
-            else if (tokens[i] == ".")
-            {
-                i++;
-                string methodName = tokens[i++];
-                Expect(tokens, ref i, "(");
-                List<Expression> arguments = new List<Expression>();
-                while (tokens[i] != ")")
-                {
-                    arguments.Add(ParseExpression(tokens, ref i));
-                    if (tokens[i] == ",")
-                    {
-                        i++;
-                    }
-                }
-                Expect(tokens, ref i, ")");
-                return new MethodCallStatement(identifier, methodName, arguments);
-            }
-            else
-            {
-                throw new Exception($"Unexpected token after identifier '{identifier}': '{tokens[i]}'");
-            }
-        }
-        throw new Exception($"Invalid statement starting with '{tokens[i]}'");
-    }
-
-    private List<Statement> ParseBlock(List<string> tokens, ref int i, params string[] terminators)
-    {
-        List<Statement> block = new List<Statement>();
-        while (i < tokens.Count && !terminators.Contains(tokens[i]))
-        {
-            block.Add(ParseStatement(tokens, ref i));
-        }
-        return block;
-    }
-
-    private List<Statement> ParseElseBlock(List<string> tokens, ref int i)
-    {
-        if (i < tokens.Count && (tokens[i] == "else" || tokens[i] == "elif"))
-        {
-            return ParseBlock(tokens, ref i, "endif");
-        }
-        return null;
     }
 
 
-    private Expression ParseExpression(List<string> tokens, ref int i)
+    private Statement ParsePrintStatement()
     {
-        return ParseLogicalOr(tokens, ref i);
+        Expect(TokenType.Delimiter, "(");
+        Expression expr = ParseExpression();
+        Expect(TokenType.Delimiter, ")");
+        return new PrintStatement(expr);
     }
 
-    private Expression ParseLogicalOr(List<string> tokens, ref int i)
+    private Statement ParseIfStatement()
     {
-        Expression left = ParseLogicalAnd(tokens, ref i);
-        while (i < tokens.Count && tokens[i] == "||")
-        {
-            string op = tokens[i++];
-            Expression right = ParseLogicalAnd(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-        return left;
-    }
+        Expect(TokenType.Delimiter, "(");
+        Expression condition = ParseExpression();
+        Expect(TokenType.Delimiter, ")");
 
-    private Expression ParseLogicalAnd(List<string> tokens, ref int i)
-    {
-        Expression left = ParseEquality(tokens, ref i);
-        while (i < tokens.Count && tokens[i] == "&&")
-        {
-            string op = tokens[i++];
-            Expression right = ParseEquality(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-        return left;
-    }
-
-    private Expression ParseEquality(List<string> tokens, ref int i)
-    {
-        Expression left = ParseRelational(tokens, ref i);
-        while (i < tokens.Count && (tokens[i] == "==" || tokens[i] == "!="))
-        {
-            string op = tokens[i++];
-            Expression right = ParseRelational(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-        return left;
-    }
-
-    private Expression ParseRelational(List<string> tokens, ref int i)
-    {
-        Expression left = ParseArithmetic(tokens, ref i);
-        while (i < tokens.Count && (tokens[i] == ">" || tokens[i] == "<" || tokens[i] == ">=" || tokens[i] == "<="))
-        {
-            string op = tokens[i++];
-            Expression right = ParseArithmetic(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-        return left;
-    }
-
-    private Expression ParseArithmetic(List<string> tokens, ref int i)
-    {
-        Expression left = ParseTerm(tokens, ref i);
-
-        while (i < tokens.Count && (tokens[i] == "+" || tokens[i] == "-"))
-        {
-            string op = tokens[i++];
-            Expression right = ParseTerm(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-
-        return left;
-    }
-
-    private Expression ParseTerm(List<string> tokens, ref int i)
-    {
-        Expression left = ParsePower(tokens, ref i);
-        while (i < tokens.Count && (tokens[i] == "*" || tokens[i] == "/" || tokens[i] == "%" || tokens[i] == "//"))
-        {
-            string op = tokens[i++];
-            Expression right = ParsePower(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-        return left;
-    }
-
-    private Expression ParsePower(List<string> tokens, ref int i)
-    {
-        Expression left = ParseFactor(tokens, ref i);
-        while (i < tokens.Count && tokens[i] == "**")
-        {
-            string op = tokens[i++];
-            Expression right = ParseFactor(tokens, ref i);
-            left = new BinaryExpression(left, op, right);
-        }
-        return left;
-    }
-
-    private Statement ParseIfStatement(List<string> tokens, ref int i)
-    {
-        i++;
-        Expect(tokens, ref i, "(");
-        Expression condition = ParseExpression(tokens, ref i);
-        Expect(tokens, ref i, ")");
-
-        List<Statement> thenBlock = ParseBlock(tokens, ref i, "elif", "else", "endif");
+        List<Statement> thenBlock = new List<Statement>();
         List<IfStatement> elifStatements = new List<IfStatement>();
         List<Statement> elseBlock = null;
 
-        while (i < tokens.Count)
+        while (!Match(TokenType.Keyword, "endif"))
         {
-            if (tokens[i] == "elif")
+            if (Match(TokenType.Keyword, "elif"))
             {
-                i++;
-                Expect(tokens, ref i, "(");
-                Expression elifCondition = ParseExpression(tokens, ref i);
-                Expect(tokens, ref i, ")");
-                List<Statement> elifBlock = ParseBlock(tokens, ref i, "elif", "else", "endif");
+                Expect(TokenType.Delimiter, "(");
+                Expression elifCondition = ParseExpression();
+                Expect(TokenType.Delimiter, ")");
+                List<Statement> elifBlock = ParseBlock("elif", "else", "endif");
                 elifStatements.Add(new IfStatement(elifCondition, elifBlock, null, new List<IfStatement>()));
             }
-            else if (tokens[i] == "else")
+            else if (Match(TokenType.Keyword, "else"))
             {
-                i++;
-                elseBlock = ParseBlock(tokens, ref i, "endif");
-                break;
-            }
-            else if (tokens[i] == "endif")
-            {
-                i++;
-                break;
+                elseBlock = ParseBlock("endif");
             }
             else
             {
-                throw new Exception($"Unexpected token '{tokens[i]}' in if statement");
+                thenBlock.Add(ParseStatement());
             }
         }
 
         return new IfStatement(condition, thenBlock, elseBlock, elifStatements);
     }
 
-    private Expression ParseFactor(List<string> tokens, ref int i)
+
+
+    private Statement ParseFunctionStatement()
     {
-        Expression result;
+        string functionName = Expect(TokenType.Identifier).Value;
+        Expect(TokenType.Delimiter, "(");
+        List<string> parameters = ParseParameters();
 
-        if (tokens[i] == "-")
+        List<Statement> body = new List<Statement>();
+        while (!Match(TokenType.Keyword, "endf"))
         {
-            i++;
-            Expression factor = ParseFactor(tokens, ref i);
-            result = new UnaryExpression("-", factor);
+            body.Add(ParseStatement());
         }
-        else if (int.TryParse(tokens[i], NumberStyles.Integer, CultureInfo.InvariantCulture, out int intValue))
-        {
-            i++;
-            result = new ConstantExpression(intValue);
-        }
-        else if (double.TryParse(tokens[i], NumberStyles.Float, CultureInfo.InvariantCulture, out double doubleValue))
-        {
-            i++;
-            result = new ConstantExpression(doubleValue);
-        }
-        else if (tokens[i] == "True" || tokens[i] == "False")
-        {
-            bool boolValue = tokens[i] == "True";
-            i++;
-            result = new BooleanExpression(boolValue);
-        }
-        else if ((tokens[i][0] == '"' && tokens[i][tokens[i].Length - 1] == '"') || (tokens[i][0] == '\'' && tokens[i][tokens[i].Length - 1] == '\''))
-        {
-            string stringValue = tokens[i++];
-            result = new StringExpression(stringValue.Substring(1, stringValue.Length - 2));
-        }
-        else if (tokens[i] == "null")
-        {
-            i++;
-            result = new NullExpression();
-        }
-        else if (tokens[i] == "[")
-        {
-            i++;
-            var elements = new List<Expression>();
-            while (tokens[i] != "]")
-            {
-                elements.Add(ParseExpression(tokens, ref i));
-                if (tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, "]");
-            result = new ListExpression(elements);
-        }
-        else if (tokens[i] == "new")
-        {
-            i++;
-            var classPath = new List<string>();
-            classPath.Add(tokens[i++]);
 
-            while (i < tokens.Count && tokens[i] == ".")
-            {
-                i++;
-                classPath.Add(tokens[i++]);
-            }
+        return new FunctionStatement(functionName, parameters, body, new Dictionary<string, object>(variables));
+    }
 
-            Expect(tokens, ref i, "(");
-            var arguments = new List<Expression>();
-            while (tokens[i] != ")")
-            {
-                Expression parsed = ParseExpression(tokens, ref i);
-                arguments.Add(parsed);
-                if (tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, ")");
-            result = new NewExpression(classPath, arguments);
-        }
-        else if (tokens[i] == "{")
-        {
-            i++;
-            var properties = new Dictionary<string, Expression>();
-            while (tokens[i] != "}")
-            {
-                string key = tokens[i++];
-                Expect(tokens, ref i, ":");
-                Expression value = ParseExpression(tokens, ref i);
-                properties.Add(key, value);
-                if (tokens[i] == ",")
-                {
-                    i++;
-                }
-            }
-            Expect(tokens, ref i, "}");
-            result = new ObjectExpression(properties);
-        }
-        else if (char.IsLetter(tokens[i][0]))
-        {
-            string identifier = tokens[i++];
-            Expression expr = new VariableExpression(identifier);
+    private Statement ParseSuperStatement()
+    {
+        Expect(TokenType.Delimiter, "(");
+        List<Expression> arguments = ParseArguments();
+        return new SuperMethodCallStatement("__init__", arguments);
+    }
 
-            if (i < tokens.Count && tokens[i] == "(")
-            {
-                i++;
-                List<Expression> arguments = new List<Expression>();
-                while (tokens[i] != ")")
-                {
-                    arguments.Add(ParseExpression(tokens, ref i));
-                    if (tokens[i] == ",")
-                    {
-                        i++;
-                    }
-                }
-                Expect(tokens, ref i, ")");
-                expr = new FunctionCallExpression(identifier, arguments);
-            }
+    private Statement ParseInitStatement()
+    {
+        Expect(TokenType.Delimiter, "(");
+        List<string> parameters = ParseParameters();
+        List<Statement> body = ParseBlock("endinit");
+        Expect(TokenType.Keyword, "endinit");
+        return new InitStatement(parameters, body);
+    }
 
-            return ParseMethodCallOrPropertyAccess(tokens, ref i, expr);
-        }
-        else if (tokens[i] == "(")
+    private Statement ParseReturnStatement()
+    {
+        Expression returnValue;
+        if (Match(TokenType.Delimiter, "("))
         {
-            i++;
-            result = ParseExpression(tokens, ref i);
-            Expect(tokens, ref i, ")");
+            returnValue = ParseExpression();
+            Expect(TokenType.Delimiter, ")");
         }
         else
         {
-            throw new Exception($"Unexpected token '{tokens[i]}'");
+            returnValue = ParseExpression();
         }
-
-        return ParseMethodCallOrPropertyAccess(tokens, ref i, result);
+        return new ReturnStatement(returnValue);
     }
 
-    private Expression ParseMethodCallOrPropertyAccess(List<string> tokens, ref int i, Expression target)
+    private Statement ParseWhileStatement()
     {
-        while (i < tokens.Count && (tokens[i] == "." || tokens[i] == "["))
+        Expect(TokenType.Delimiter, "(");
+        Expression condition = ParseExpression();
+        Expect(TokenType.Delimiter, ")");
+        Expect(TokenType.Keyword, "do");
+        List<Statement> body = ParseBlock("endwhile");
+        Expect(TokenType.Keyword, "endwhile");
+        return new WhileStatement(condition, body);
+    }
+
+    private Statement ParseForStatement()
+    {
+        Expect(TokenType.Delimiter, "(");
+        if (Match(TokenType.Identifier))
         {
-            if (tokens[i] == ".")
+            string variable = PreviousToken.Value;
+            if (Match(TokenType.Keyword, "in"))
             {
-                i++;
-                string memberName = tokens[i++];
-                if (i < tokens.Count && tokens[i] == "(")
+                Expression iterableExpression = ParseExpression();
+                Expect(TokenType.Delimiter, ")");
+                Expect(TokenType.Keyword, "do");
+                List<Statement> body = ParseBlock("endfor");
+                Expect(TokenType.Keyword, "endfor");
+                return new ForEachStatement(variable, iterableExpression, body);
+            }
+            else if (Match(TokenType.Operator, "="))
+            {
+                Expression startValue = ParseExpression();
+                Expect(TokenType.Keyword, "to");
+                Expression endValue = ParseExpression();
+                Expect(TokenType.Delimiter, ")");
+                Expect(TokenType.Keyword, "do");
+                List<Statement> body = ParseBlock("endfor");
+                Expect(TokenType.Keyword, "endfor");
+                return new ForStatement(variable, startValue, endValue, body);
+            }
+        }
+        else if (Match(TokenType.Delimiter, "("))
+        {
+            string firstVariable = Expect(TokenType.Identifier).Value;
+            Expect(TokenType.Delimiter, ",");
+            string secondVariable = Expect(TokenType.Identifier).Value;
+            Expect(TokenType.Delimiter, ")");
+            Expect(TokenType.Keyword, "in");
+            Expression iterableExpression = ParseExpression();
+            Expect(TokenType.Delimiter, ")");
+            Expect(TokenType.Keyword, "do");
+            List<Statement> body = ParseBlock("endfor");
+            Expect(TokenType.Keyword, "endfor");
+            return new ForEachKVStatement(firstVariable, secondVariable, iterableExpression, body);
+        }
+        throw new Exception("Invalid for statement syntax");
+    }
+
+    private Statement ParseClassStatement()
+    {
+        string className = Expect(TokenType.Identifier).Value;
+        Expression baseClassExpression = null;
+        if (Match(TokenType.Keyword, "extends"))
+        {
+            baseClassExpression = ParseExpression();
+        }
+        List<Statement> body = ParseBlock("endclass");
+        Expect(TokenType.Keyword, "endclass");
+        return new ClassStatement(className, baseClassExpression, body);
+    }
+
+    private Statement ParseShareStatement()
+    {
+        Expect(TokenType.Delimiter, "(");
+        List<string> importedItems = new List<string>();
+        while (!Match(TokenType.Delimiter, ")"))
+        {
+            importedItems.Add(Expect(TokenType.Identifier).Value);
+            Match(TokenType.Delimiter, ",");
+        }
+        return new ShareStatement(importedItems, SharedVariables);
+    }
+
+    private Statement ParseImportStatement()
+    {
+        string fileName = Expect(TokenType.String).Value;
+        Expect(TokenType.Keyword, "use");
+
+        if (Match(TokenType.Operator, "*"))
+        {
+            return new ImportStatement(fileName, new List<string>(), true);
+        }
+        else
+        {
+            Expect(TokenType.Delimiter, "{");
+            List<string> importedItems = new List<string>();
+            while (!Match(TokenType.Delimiter, "}"))
+            {
+                importedItems.Add(Expect(TokenType.Identifier).Value);
+                Match(TokenType.Delimiter, ",");
+            }
+            return new ImportStatement(fileName, importedItems, false);
+        }
+    }
+
+    private Statement ParseLoadStatement()
+    {
+        string fileName = Expect(TokenType.String).Value;
+        Expect(TokenType.Keyword, "as");
+        string alias = Expect(TokenType.Identifier).Value;
+        return new LoadStatement(fileName, alias);
+    }
+
+    private Statement ParseAssignmentOrFunctionCall()
+    {
+        string identifier = PreviousToken.Value;
+        Expression target = new VariableExpression(identifier);
+
+        while (Match(TokenType.Delimiter, "[") || Match(TokenType.Delimiter, "."))
+        {
+            if (PreviousToken.Value == "[")
+            {
+                Expression key = ParseExpression();
+                Expect(TokenType.Delimiter, "]");
+                target = new IndexAccessExpression(target, key);
+            }
+            else if (PreviousToken.Value == ".")
+            {
+                string propertyName = Expect(TokenType.Identifier).Value;
+
+                if (Match(TokenType.Delimiter, "("))
                 {
-                    i++;
-                    var arguments = new List<Expression>();
-                    while (tokens[i] != ")")
-                    {
-                        arguments.Add(ParseExpression(tokens, ref i));
-                        if (tokens[i] == ",")
-                        {
-                            i++;
-                        }
-                    }
-                    Expect(tokens, ref i, ")");
-                    target = new MethodCallExpression(target, memberName, arguments);
+                    List<Expression> arguments = ParseArguments();
+                    return new MethodCallStatement(identifier, propertyName, arguments);
                 }
                 else
                 {
-                    target = new PropertyAccessExpression(target, memberName);
+                    target = new IndexAccessExpression(target, new StringExpression(propertyName));
                 }
             }
-            else if (tokens[i] == "[")
+        }
+
+        if (Match(TokenType.Operator, "="))
+        {
+            Expression value = ParseExpression();
+            if (target is VariableExpression varExpr)
             {
-                i++;
-                Expression index = ParseExpression(tokens, ref i);
-                Expect(tokens, ref i, "]");
-                target = new IndexAccessExpression(target, index);
+                return new AssignmentStatement(varExpr.Name, value);
+            }
+            else if (target is IndexAccessExpression indexExpr)
+            {
+                return new IndexAssignmentStatement(indexExpr.Target, indexExpr.Key, value);
+            }
+            else
+            {
+                throw new Exception("Invalid assignment target");
             }
         }
-        return target;
+        else if (Match(TokenType.Delimiter, "("))
+        {
+            List<Expression> arguments = ParseArguments();
+            return new FunctionCallStatement(identifier, arguments);
+        }
+
+        throw new Exception($"Unexpected token after identifier '{identifier}': '{CurrentToken.Value}'");
     }
 
 
-
-    private Expression ParseMethodCall(List<string> tokens, ref int i, Expression target)
+    private List<Statement> ParseBlock(params string[] terminators)
     {
-        while (i < tokens.Count && tokens[i] == ".")
+        List<Statement> block = new List<Statement>();
+        while (currentTokenIndex < tokens.Count && !IsTerminator(terminators))
         {
-            i++;
-            string methodName = tokens[i++];
-            Expect(tokens, ref i, "(");
-            var arguments = new List<Expression>();
-            while (tokens[i] != ")")
+            block.Add(ParseStatement());
+        }
+        return block;
+    }
+
+    private bool IsTerminator(string[] terminators)
+    {
+        return CurrentToken.Type == TokenType.Keyword && terminators.Contains(CurrentToken.Value);
+    }
+
+    private Expression ParseExpression()
+    {
+        return ParseLogicalOr();
+    }
+
+    private Expression ParseLogicalOr()
+    {
+        Expression left = ParseLogicalAnd();
+        while (Match(TokenType.Operator, "||"))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseLogicalAnd();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseLogicalAnd()
+    {
+        Expression left = ParseIn();
+        while (Match(TokenType.Operator, "&&"))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseIn();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseIn()
+    {
+        Expression left = ParseEquality();
+        while (Match(TokenType.Keyword, "in"))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseEquality();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseEquality()
+    {
+        Expression left = ParseRelational();
+        while (Match(TokenType.Operator, "==") || Match(TokenType.Operator, "!="))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseRelational();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseRelational()
+    {
+        Expression left = ParseArithmetic();
+        while (Match(TokenType.Operator, ">") || Match(TokenType.Operator, "<") ||
+               Match(TokenType.Operator, ">=") || Match(TokenType.Operator, "<="))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseArithmetic();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseArithmetic()
+    {
+        Expression left = ParseTerm();
+        while (Match(TokenType.Operator, "+") || Match(TokenType.Operator, "-"))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseTerm();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseTerm()
+    {
+        Expression left = ParsePower();
+        while (Match(TokenType.Operator, "*") || Match(TokenType.Operator, "/") ||
+               Match(TokenType.Operator, "%") || Match(TokenType.Operator, "//"))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParsePower();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParsePower()
+    {
+        Expression left = ParseFactor();
+        while (Match(TokenType.Operator, "**"))
+        {
+            string op = PreviousToken.Value;
+            Expression right = ParseFactor();
+            left = new BinaryExpression(left, op, right);
+        }
+        return left;
+    }
+
+    private Expression ParseFactor()
+    {
+        Expression expr = null;
+
+        if (Match(TokenType.Operator, "-"))
+        {
+            Expression factor = ParseFactor();
+            return new UnaryExpression("-", factor);
+        }
+
+        if (Match(TokenType.Number))
+        {
+            if (int.TryParse(PreviousToken.Value, out int intValue))
             {
-                arguments.Add(ParseExpression(tokens, ref i));
-                if (tokens[i] == ",")
+                expr = new ConstantExpression(intValue);
+            }
+            else if (double.TryParse(PreviousToken.Value, NumberStyles.Float, CultureInfo.InvariantCulture, out double doubleValue))
+            {
+                expr = new ConstantExpression(doubleValue);
+            }
+        }
+        else if (Match(TokenType.Keyword, "True") || Match(TokenType.Keyword, "False"))
+        {
+            expr = new BooleanExpression(PreviousToken.Value == "True");
+        }
+        else if (Match(TokenType.String))
+        {
+            expr = new StringExpression(PreviousToken.Value);
+        }
+        else if (Match(TokenType.Keyword, "null"))
+        {
+            expr = new NullExpression();
+        }
+        else if (Match(TokenType.Delimiter, "["))
+        {
+            expr = ParseListExpression();
+        }
+        else if (Match(TokenType.Keyword, "new"))
+        {
+            expr = ParseNewExpression();
+        }
+        else if (Match(TokenType.Delimiter, "{"))
+        {
+            expr = ParseObjectExpression();
+        }
+        else if (Match(TokenType.Identifier))
+        {
+            expr = ParseVariableOrFunctionCall();
+        }
+        else if (Match(TokenType.Delimiter, "("))
+        {
+            expr = ParseExpression();
+            Expect(TokenType.Delimiter, ")");
+        }
+
+        while (Match(TokenType.Delimiter, "."))
+        {
+            string propertyName = Expect(TokenType.Identifier).Value;
+
+            if (Match(TokenType.Delimiter, "("))
+            {
+                List<Expression> arguments = ParseArguments();
+                expr = new MethodCallExpression(expr, propertyName, arguments);
+            }
+            else
+            {
+                expr = new PropertyAccessExpression(expr, propertyName);
+            }
+        }
+
+        if (expr == null)
+        {
+            throw new Exception($"Unexpected token: {CurrentToken.Value}");
+        }
+
+        return expr;
+    }
+
+
+    private Expression ParseListExpression()
+    {
+        var elements = new List<Expression>();
+        while (!Match(TokenType.Delimiter, "]"))
+        {
+            elements.Add(ParseExpression());
+            if (!Match(TokenType.Delimiter, ","))
+            {
+                break;
+            }
+        }
+        Expect(TokenType.Delimiter, "]");
+        return new ListExpression(elements);
+    }
+
+    private Expression ParseNewExpression()
+    {
+        var classPath = new List<string>();
+        classPath.Add(Expect(TokenType.Identifier).Value);
+
+        while (Match(TokenType.Delimiter, "."))
+        {
+            classPath.Add(Expect(TokenType.Identifier).Value);
+        }
+
+        Expect(TokenType.Delimiter, "(");
+        var arguments = ParseArguments();
+        return new NewExpression(classPath, arguments);
+    }
+
+    private Expression ParseObjectExpression()
+    {
+        var properties = new Dictionary<string, Expression>();
+        while (!Match(TokenType.Delimiter, "}"))
+        {
+            string key;
+            if (Match(TokenType.Identifier))
+            {
+                key = PreviousToken.Value;
+            }
+            else if (Match(TokenType.String))
+            {
+                key = PreviousToken.Value;
+            }
+            else
+            {
+                throw new Exception($"Expected Identifier or String for object key, but found {CurrentToken.Type} at line {CurrentToken.Line}, column {CurrentToken.Column}");
+            }
+
+            Expect(TokenType.Delimiter, ":");
+            Expression value = ParseExpression();
+            properties.Add(key, value);
+            if (!Match(TokenType.Delimiter, ","))
+            {
+                break;
+            }
+        }
+        Expect(TokenType.Delimiter, "}");
+        return new ObjectExpression(properties);
+    }
+
+    private Expression ParseVariableOrFunctionCall()
+    {
+        string identifier = PreviousToken.Value;
+        Expression expr = new VariableExpression(identifier);
+
+        while (true)
+        {
+            if (Match(TokenType.Delimiter, "("))
+            {
+                List<Expression> arguments = ParseArguments();
+                expr = new FunctionCallExpression(identifier, arguments);
+            }
+            else if (Match(TokenType.Delimiter, "["))
+            {
+                Expression key = ParseExpression();
+                Expect(TokenType.Delimiter, "]");
+                expr = new IndexAccessExpression(expr, key);
+            }
+            else if (Match(TokenType.Delimiter, "."))
+            {
+                string memberName = Expect(TokenType.Identifier).Value;
+                if (Match(TokenType.Delimiter, "("))
                 {
-                    i++;
+                    var arguments = ParseArguments();
+                    expr = new MethodCallExpression(expr, memberName, arguments);
+                }
+                else
+                {
+                    expr = new PropertyAccessExpression(expr, memberName);
                 }
             }
-            Expect(tokens, ref i, ")");
-            target = new MethodCallExpression(target, methodName, arguments);
+            else
+            {
+                break;
+            }
         }
-        return target;
+
+        return expr;
     }
 
-    private Expression ParsePropertyAccess(List<string> tokens, ref int i, Expression target)
+    private List<string> ParseParameters()
     {
-        while (i < tokens.Count && tokens[i] == ".")
+        List<string> parameters = new List<string>();
+        while (!Match(TokenType.Delimiter, ")"))
         {
-            i++;
-            string propertyName = tokens[i++];
-            target = new PropertyAccessExpression(target, propertyName);
+            parameters.Add(Expect(TokenType.Identifier).Value);
+            if (!Match(TokenType.Delimiter, ","))
+            {
+                Expect(TokenType.Delimiter, ")");
+                break;
+            }
         }
-        return target;
+        return parameters;
     }
 
-    private Expression GetRootTarget(IndexAccessExpression expr)
+    private List<Expression> ParseArguments()
     {
-        while (expr.Target is IndexAccessExpression nestedExpr)
+        List<Expression> arguments = new List<Expression>();
+        while (!Match(TokenType.Delimiter, ")"))
         {
-            expr = nestedExpr;
+            arguments.Add(ParseExpression());
+            if (!Match(TokenType.Delimiter, ","))
+            {
+                Expect(TokenType.Delimiter, ")");
+                break;
+            }
         }
-        return expr.Target;
+        return arguments;
     }
 
+    private Token CurrentToken => tokens[currentTokenIndex];
+    private Token PreviousToken => tokens[currentTokenIndex - 1];
 
-    private void Expect(List<string> tokens, ref int i, string expected)
+    private bool Match(TokenType type)
     {
-        if (tokens[i] != expected)
+        if (CurrentToken.Type == type)
         {
-            throw new Exception($"Expected '{expected}', but found '{tokens[i]}'");
+            currentTokenIndex++;
+            return true;
         }
-        i++;
+        return false;
+    }
+
+    private bool Match(TokenType type, string value)
+    {
+        if (CurrentToken.Type == type && CurrentToken.Value == value)
+        {
+            currentTokenIndex++;
+            return true;
+        }
+        return false;
+    }
+
+    private Token Expect(TokenType type)
+    {
+        if (CurrentToken.Type != type)
+        {
+            throw new Exception($"Expected {type}, but found {CurrentToken.Type} at line {CurrentToken.Line}");
+        }
+        return tokens[currentTokenIndex++];
+    }
+    
+    private Token Expect(TokenType type, string value)
+    {
+        if (CurrentToken.Type != type || CurrentToken.Value != value)
+        {
+            throw new Exception($"Expected {type} with value '{value}', but found {CurrentToken.Type} with value '{CurrentToken.Value}'");
+        }
+        return tokens[currentTokenIndex++];
     }
 }

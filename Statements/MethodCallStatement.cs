@@ -50,6 +50,33 @@ class MethodCallStatement : Statement
                     variables["return"] = result;
                 }
                 return;
+            } else if (eso.containsKey(methodName))
+            {
+                object method = eso[methodName];
+                if (method is FunctionStatement function)
+                {
+                    var localVariables = new Dictionary<string, object>(variables);
+                    var evaluatedArgs = arguments.Select(arg => arg.Evaluate(variables, functions)).ToArray();
+
+                    for (int i = 0; i < function.Parameters.Count; i++)
+                    {
+                        localVariables[function.Parameters[i]] = evaluatedArgs[i];
+                    }
+
+                    foreach (var statement in function.Body)
+                    {
+                        statement.Execute(localVariables, functions);
+                        if (localVariables.ContainsKey("return"))
+                        {
+                            return;
+                        }
+                    }
+                    return;
+                }
+                else
+                {
+                    throw new Exception($"The method '{methodName}' is not a valid function.");
+                }
             }
             if (methodName == "set")
             {
