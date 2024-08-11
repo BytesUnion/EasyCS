@@ -1,3 +1,6 @@
+# EasyCS
+ The EasyScript programming language Interpreter made on C#
+
 # EasyScript
  The programming language that was created in 2022 but continued in 2024 🎨
  
